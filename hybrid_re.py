@@ -11,16 +11,17 @@ from mcp.client.stdio import stdio_client
 from openai import OpenAI, AsyncOpenAI
 
 from ghidra_conn import GhidraConn
-import tests
 import evidence as ev
 from memory_retrieval import LongTermMemory
 
 DB_PATH = "re_memory.sqlite"
+LLM_LOG = "llm_log.jsonl"   # one JSON object per request/response
+
 MODEL         = "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ"    
 TEMPERATURE   = 0.0
 
 AI_URL  = "http://localhost:8000/v1"
-AI_KEY  = ""     
+AI_KEY  = "KEY"     
 
 HY_SYSTEM_PROMPT = (
     "You are an expert reverse engineer. You are given ONE function together "
@@ -41,6 +42,19 @@ HY_SYSTEM_PROMPT = (
     "prefix the name with 'maybe_'. Never invent behavior you cannot justify "
     "from the code or evidence."
 )
+
+def log_llm(addr, prompt, response, elapsed, usage=None):
+    """Append one prompt/response pair to LLM_LOG (append-only, no deps)."""
+    with open(LLM_LOG, "a", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "time": time.strftime("%H:%M:%S"),
+            "address": addr,
+            "elapsed": round(elapsed, 2),
+            "prompt_tokens": getattr(usage, "prompt_tokens", None),
+            "completion_tokens": getattr(usage, "completion_tokens", None),
+            "prompt": prompt,
+            "response": response,
+        }) + "\n")
 
 def extract_json_object(text):
     """Pull the first {...} JSON object out of a model reply, tolerating stray prose."""
@@ -171,9 +185,9 @@ async def apply_to_ghidra(ghidra_connection, addr, new_name, summary, variables)
     return r['success']
 
 
-async def analyze_one(client, sem, user_prompt):
-    """One async LLM call, throttled by a shared semaphore."""
+async def analyze_one(client, sem, user_prompt, addr=""):
     async with sem:
+        t0 = time.time()
         resp = await client.chat.completions.create(
             model=MODEL,
             temperature=TEMPERATURE,
@@ -182,7 +196,10 @@ async def analyze_one(client, sem, user_prompt):
                 {"role": "user", "content": user_prompt},
             ],
         )
-    return extract_json_object(resp.choices[0].message.content or "")
+    raw = resp.choices[0].message.content or ""
+    log_llm(addr, user_prompt, raw, time.time() - t0,
+            getattr(resp, "usage", None))
+    return extract_json_object(raw)
 
 
 async def pass_analyze(ghidra_connection, memory, client, functions, apply=False, concurrency=8):
@@ -203,14 +220,11 @@ async def pass_analyze(ghidra_connection, memory, client, functions, apply=False
     sem = asyncio.Semaphore(concurrency)
     analyzed = deduped = errors = 0
     start = time.time()
-
-    # Process in concurrent waves so vLLM actually batches them together
-    # (watch the server log: "Running: N reqs" should now be > 1).
     
     for base_i in range(0, len(order), concurrency):
         chunk = order[base_i:base_i + concurrency]
         
-        # Build prompts synchronously (fast); resolve dedups inline (no LLM).
+        # Build prompts synchronously 
         pending = []   # (addr, bundle, prompt)
         for addr in chunk:
             
@@ -231,15 +245,13 @@ async def pass_analyze(ghidra_connection, memory, client, functions, apply=False
                     callers.append(s)
             bundle = ev.build_bundle(addr, rec["orig_name"], rec["decomp"],
                                      get_summary=memory.summary_of, callers=callers,
-                                     strings_map=strings_map,
                                      imports_set=imports_set)
             pending.append((addr, bundle, ev.render_prompt(bundle)))
 
         if pending:
             
-            # fire the whole wave at once -> vLLM batches concurrent requests
             results = await asyncio.gather(
-                *(analyze_one(client, sem, p) for _, _, p in pending),
+                *(analyze_one(client, sem, p, a) for a, _, p in pending),
                 return_exceptions=True)
 
             for (addr, bundle, _), result in zip(pending, results):
@@ -248,7 +260,7 @@ async def pass_analyze(ghidra_connection, memory, client, functions, apply=False
                     errors += 1
                     continue
                 if not result or not result.get("new_name"):
-                    memory.upsert(addr, status="indexed")   # retry on a later pass
+                    memory.upsert(addr, status="indexed")  
                     continue
                 new_name = _re.sub(r"[^A-Za-z0-9_]", "_",
                                    str(result["new_name"]))[:60]

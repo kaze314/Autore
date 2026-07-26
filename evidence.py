@@ -27,7 +27,7 @@ def _addr(hexstr):
 def extract(decomp, self_name=None):
 
     callee_addrs = {_addr(h) for h in FUN_RE.findall(decomp)}
-    # the function's own FUN_ name appears in its signature -> not a callee.
+  
     if self_name and self_name.startswith("FUN_"):
         callee_addrs.discard("0x" + self_name[4:].lower())
     callee_addrs = sorted(callee_addrs)
@@ -50,16 +50,10 @@ def extract(decomp, self_name=None):
     }
 
 
-def build_bundle(address, orig_name, decomp, *, get_summary, callers,
-                 strings_map=None, imports_set=None,
-                 max_strings=25, max_callees=40):
+def build_bundle(address, orig_name, decomp, *, get_summary, callers, imports_set=None, max_callees=40):
     raw = extract(decomp, self_name=orig_name)
-    strings_map = strings_map or {}
     imports_set = imports_set or set()
 
-    # resolve DAT_/LAB_ addresses to the actual string text
-    strings = [strings_map[a] for a in raw["data_addrs"] if a in strings_map]
-    strings = strings[:max_strings]
     # split call targets into imported APIs vs already-named internal functions
     apis = sorted({n for n in raw["named_calls"] if n in imports_set})
     known_named = [n for n in raw["named_calls"] if n not in imports_set]
@@ -76,7 +70,6 @@ def build_bundle(address, orig_name, decomp, *, get_summary, callers,
         "address": address,
         "orig_name": orig_name,
         "decomp": decomp,
-        "strings": strings,
         "apis": apis,
         "known_named_calls": known_named,
         "known_callees": known_callees,
@@ -90,16 +83,12 @@ def build_bundle(address, orig_name, decomp, *, get_summary, callers,
 def render_prompt(bundle, max_decomp_chars=9000):
     lines = [f"Function: {bundle['orig_name']} @ {bundle['address']}", ""]
 
+
     if bundle["callers"]:
         lines.append("Called by (how it's used):")
         for c in bundle["callers"][:8]:
             s = f" - {c['summary']}" if c.get("summary") else ""
             lines.append(f"  - {c.get('name')}{s}")
-        lines.append("")
-
-    if bundle.get("strings"):
-        lines.append("Referenced strings:")
-        lines += [f'  - "{s}"' for s in bundle["strings"]]
         lines.append("")
 
     if bundle.get("apis"):
@@ -116,7 +105,6 @@ def render_prompt(bundle, max_decomp_chars=9000):
         lines.append("Other named calls: "
                      + ", ".join(bundle["known_named_calls"][:15]))
         lines.append("")
-
 
     if bundle["constants"]:
         lines.append("Notable 32-bit constants: " + ", ".join(bundle["constants"]))
