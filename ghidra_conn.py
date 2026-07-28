@@ -91,15 +91,25 @@ class GhidraConn:
         raw = await self.client.get(GHIDRA_SERVER + "/decompile_function", params=params)
         return raw.text
     
-    async def batch_rename(self, function_address, function_name, parameter_renames={}, local_renames={}):
+    async def batch_rename(self, function_address, function_name,*,
+                            parameter_renames=[], local_renames=[], global_renames=[]):
         params = {
             'function_address': function_address,
             'function_name': function_name,
             'parameter_renames': parameter_renames,
             'local_renames': local_renames
         }
+        for g_rename in global_renames:
+            global_params = {
+                'old_name': g_rename['old_name'],
+                'new_name': g_rename['new_name']
+            }
+            raw = await self.client.post(GHIDRA_SERVER + "/rename_global_variable", json=global_params)
+            
         raw = await self.client.post(GHIDRA_SERVER + "/batch_rename_function_components", json=params)
         return raw.json()
+
+    
 
 
 

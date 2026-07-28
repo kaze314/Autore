@@ -15,7 +15,7 @@ import evidence as ev
 from memory_retrieval import LongTermMemory
 
 DB_PATH = "re_memory.sqlite"
-LLM_LOG = "llm_log.jsonl"   # one JSON object per request/response
+LLM_LOG = "llm_log.jsonl"  
 
 MODEL         = "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ"    
 TEMPERATURE   = 0.0
@@ -25,21 +25,42 @@ AI_KEY  = "KEY"
 
 HY_SYSTEM_PROMPT = (
     "You are an expert reverse engineer. You are given ONE function together "
-    "with one-line summaries of the functions it calls, strings, "
+    "with one-line summaries of the functions it calls "
     "and the functions that call it, and notable constants. Use ALL of this "
     "evidence, not just the code, to decide what the function does. "
+
+    "Confidence measures how much your name TELLS SOMEONE, not whether it is "
+    "technically true. 'initialize_structure' is usually true and tells the "
+    "reader nothing -- that is low confidence.\n"
+    "  0.9-1.0  names the specific subject and action "
+    "(e.g. validate_ground_item_packet)\n"
+    "  0.6-0.8  right subject, action somewhat general "
+    "(e.g. parse_item_message)\n"
+    "  0.3-0.5  right domain only (e.g. handle_network_message)\n"
+    "  0.0-0.2  generic filler: process_data, initialize_structure, "
+    "setup_values, handle_input, copy_value\n\n"
+
+    "IMPORTANT: if the evidence does not support a specific name, give a "
+    "generic name with confidence below 0.3. Do NOT invent specifics you "
+    "cannot point to in the evidence. An honest 'unknown' is more useful than "
+    "a confident guess.\n\n"
+
     "You do not need to rename all variables, only function parameters and global variables."
-    "If you are not atleast 0.8 confident, do not rename any variables.\n"
+    "If you think a global variable has an incorrect or vague name, you should rename it."
+    "If the global is already named, and you think it is appropriate, you can keep the name the same"
+    "add g_ + a Hungarian type prefix (ex. g_pActiveQuestState) for the global names, its the only naming convention that will be accepted."
+    "The summery for the global names is not optional. \n"
     "Reply with ONLY a JSON object in exactly this shape:\n"
     '{"new_name": "snake_case_name", '
     '"category": "one of: init, crypto, network, file_io, registry, '
     'string_util, memory, math, ui, parsing, game_logic, wrapper, '
     'error_handling, unknown", '
-    '"summary": "one sentence: what it does AND how its data is used", '
+    '"summary": "Explain what it does AND how its data is used, include structure details such as memory access.", '
     '"confidence": 0.0, '
-    '"variables": [{"existing_var_name": "meaningful_name"}]}\n'
+    '"global_variables": [{"old_name": "the name in ghidra", "new_name": "The name you give g_ + a Hungarian type prefix", "Summery": '
+    '"explain how the global variable is used in this function}]}\n'
     "confidence is 0.0-1.0. If the evidence is thin, lower the confidence and "
-    "prefix the name with 'maybe_'. Never invent behavior you cannot justify "
+    "prefix the name with 'maybe_'. If the function name is vague, drop the confidence. Never invent behavior you cannot justify "
     "from the code or evidence."
 )
 
@@ -173,9 +194,9 @@ def order_bottom_up(memory, addrs):
     return order
 
 
-async def apply_to_ghidra(ghidra_connection, addr, new_name, summary, variables):
+async def apply_to_ghidra(ghidra_connection, addr, new_name, summary, global_vars):
 
-    r = await ghidra_connection.batch_rename(addr, new_name)
+    r = await ghidra_connection.batch_rename(addr, new_name, global_renames=global_vars)
     #TODO rename variables 
 
     if summary:
@@ -208,8 +229,11 @@ async def pass_analyze(ghidra_connection, memory, client, functions, apply=False
     strings_map = memory.strings_map()
     imports_set = set(memory.meta_get("imports", []))
 
+    #indexed = {r[0] for r in memory.db.execute(
+    #    "SELECT address FROM functions WHERE status='indexed'")}
+
     indexed = {r[0] for r in memory.db.execute(
-        "SELECT address FROM functions WHERE status='indexed'")}
+            "SELECT address FROM functions")}
     addrs = [f["address"] for f in functions if f["address"] in indexed]
 
     order = order_bottom_up(memory, addrs)
@@ -229,7 +253,7 @@ async def pass_analyze(ghidra_connection, memory, client, functions, apply=False
         for addr in chunk:
             
             rec = memory.get(addr)
-            if not rec or rec.get("status") == "analyzed":
+            if not rec: #or rec.get("status") == "analyzed":
                 continue
             twin = memory.by_hash(rec["decomp_hash"])
             if twin and twin["address"] != addr:
@@ -244,7 +268,7 @@ async def pass_analyze(ghidra_connection, memory, client, functions, apply=False
                 if s:
                     callers.append(s)
             bundle = ev.build_bundle(addr, rec["orig_name"], rec["decomp"],
-                                     get_summary=memory.summary_of, callers=callers,
+                                     get_summary=memory.summary_of, callers=callers, callees=memory.callees_of(addr),
                                      imports_set=imports_set)
             pending.append((addr, bundle, ev.render_prompt(bundle)))
 
@@ -272,10 +296,11 @@ async def pass_analyze(ghidra_connection, memory, client, functions, apply=False
                               {"constants": bundle["constants"]}),
                           status="analyzed")
                 analyzed += 1
-                if apply:
+                #print(result)
+                if apply and result['global_variables'] and result.get("confidence") > 0.5:
                     await apply_to_ghidra(ghidra_connection, addr, new_name,
                                           str(result.get("summary", "")).strip(),
-                                          result.get("variables"))
+                                          result['global_variables'])
 
     
         memory.commit()
@@ -300,7 +325,7 @@ async def run(args):
     print(f"[i] {len(functions)} target functions")
 
     await build_caches(conn, memory)
-    await pass_index(conn, memory, functions, jobs=args.jobs)
+    #await pass_index(conn, memory, functions, jobs=args.jobs)
 
     if args.analyze:
         await pass_analyze(conn, memory, client, functions,

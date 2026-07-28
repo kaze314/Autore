@@ -8,8 +8,10 @@ DATA_REF_RE = re.compile(r"\b(?:PTR_)?(?:DAT|LAB)_([0-9a-fA-F]{5,})\b")
 STR_SYM_RE = re.compile(r"\bs_[A-Za-z0-9_]*?_([0-9a-fA-F]{6,})\b")
 # any identifier immediately followed by '(' -> a call site.
 CALL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
-# constants 
+# constants
 MAGIC_RE = re.compile(r"\b0x([0-9a-fA-F]{8})\b")
+# Strings
+STR_LIT_RE = re.compile(r'"((?:[^"\\\n]|\\.){3,})"')
 
 _NON_CALLS = {
     "if", "while", "for", "switch", "return", "sizeof", "do", "else", "case",
@@ -38,28 +40,45 @@ def extract(decomp, self_name=None):
     names = {n for n in CALL_RE.findall(decomp) if n not in _NON_CALLS}
     names.discard(self_name)
     named_calls = sorted(n for n in names if not n.startswith("FUN_"))
+    named_calls = sorted(n for n in named_calls if not n.startswith("thunk"))
 
     constants = sorted({"0x" + h.lower() for h in MAGIC_RE.findall(decomp)})
+
+    literals, seen = [], set()
+    for m in STR_LIT_RE.finditer(decomp):
+        s = m.group(1)
+        if s not in seen:
+            seen.add(s)
+            literals.append(s)
 
     return {
         "callee_addrs": callee_addrs,
         "data_addrs": sorted(data_addrs),
         "named_calls": named_calls,
         "constants": constants,
+        "literals": literals,
         "sets_vtable": "vftable" in decomp,
     }
 
 
-def build_bundle(address, orig_name, decomp, *, get_summary, callers, imports_set=None, max_callees=40):
+def build_bundle(address, orig_name, decomp, *, get_summary, callers,
+                 imports_set=None, strings_map=None, callees=None,
+                 max_callees=40, max_strings=20):
     raw = extract(decomp, self_name=orig_name)
     imports_set = imports_set or set()
+
+
+    strings = list(raw["literals"])
+    if strings_map:
+        strings += [strings_map[a] for a in raw["data_addrs"] if a in strings_map]
+    strings = strings[:max_strings]
 
     # split call targets into imported APIs vs already-named internal functions
     apis = sorted({n for n in raw["named_calls"] if n in imports_set})
     known_named = [n for n in raw["named_calls"] if n not in imports_set]
 
     known_callees, unknown_callees = [], []
-    for ca in raw["callee_addrs"][:max_callees]:
+    for ca in callees[:max_callees]:
         rec = get_summary(ca)
         if rec and rec.get("summary"):
             known_callees.append((rec.get("name") or ca, rec["summary"]))
@@ -70,6 +89,7 @@ def build_bundle(address, orig_name, decomp, *, get_summary, callers, imports_se
         "address": address,
         "orig_name": orig_name,
         "decomp": decomp,
+        "strings": strings,
         "apis": apis,
         "known_named_calls": known_named,
         "known_callees": known_callees,
@@ -89,6 +109,11 @@ def render_prompt(bundle, max_decomp_chars=9000):
         for c in bundle["callers"][:8]:
             s = f" - {c['summary']}" if c.get("summary") else ""
             lines.append(f"  - {c.get('name')}{s}")
+        lines.append("")
+
+    if bundle.get("strings"):
+        lines.append("Referenced strings:")
+        lines += [f'  - "{s}"' for s in bundle["strings"]]
         lines.append("")
 
     if bundle.get("apis"):
