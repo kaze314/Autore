@@ -5,7 +5,7 @@ from ghidra.app.decompiler import DecompInterface
 
 OUT_PATH = "D:/Main/Programs/auto_re/ghidra_dump.jsonl"
 DECOMP_TIMEOUT = 60          
-SKIP_THUNKS = True
+SKIP_THUNKS = False
 
 
 def callee_addrs(func):
