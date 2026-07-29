@@ -1,0 +1,6 @@
+source .venv/bin/activate
+VLLM_WSL2_ENABLE_PIN_MEMORY=1 vllm serve Qwen/Qwen2.5-Coder-14B-Instruct-AWQ     --max-model-len 8192     --gpu-memory-utilization 0.92
+
+OR 
+
+VLLM_WSL2_ENABLE_PIN_MEMORY=1 vllm serve Qwen/Qwen2.5-Coder-14B-Instruct-AWQ     --max-model-len 16268     --gpu-memory-utilization 0.92

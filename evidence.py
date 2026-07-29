@@ -27,9 +27,6 @@ def _addr(hexstr):
 
 
 def global_key(symbol):
-    """Stable key for a global across runs. Ghidra's DAT_/PTR_ symbols carry
-    their address, so use that; anything already renamed (g_pFoo) has no address
-    in the name, so fall back to the name itself."""
     m = re.search(r"([0-9a-fA-F]{5,})$", symbol or "")
     return _addr(m.group(1)) if m else "name:" + (symbol or "").lower()
 

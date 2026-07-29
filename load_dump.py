@@ -4,8 +4,8 @@ import sys
 
 from memory_retrieval import LongTermMemory
 
-DB_PATH = "re_memory.sqlite"
-DUMP_PATH = "ghidra_dump.jsonl"
+DB_PATH = "logs/data/re_memory.sqlite"
+DUMP_PATH = "logs/data/ghidra_dump.jsonl"
 
 
 def load(dump_path=DUMP_PATH, db_path=DB_PATH):

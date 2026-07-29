@@ -126,8 +126,8 @@ def report(truth, preds, show, sample=1000, seed=0):
 
 def main():
     ap = argparse.ArgumentParser(description="Score predicted names vs ground truth.")
-    ap.add_argument("--db", default="re_memory.sqlite", help="predictions DB")
-    ap.add_argument("--truth", default="ground_truth.jsonl")
+    ap.add_argument("--db", default="data/re_memory.sqlite", help="predictions DB")
+    ap.add_argument("--truth", default="data/ground_truth.jsonl")
     ap.add_argument("--show", type=int, default=10, help="examples to print (0=none)")
     ap.add_argument("--json", help="also write metrics to this JSON file")
     ap.add_argument("--sample", type=int, default=1000,

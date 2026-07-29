@@ -14,8 +14,8 @@ from ghidra_conn import GhidraConn
 import evidence as ev
 from memory_retrieval import LongTermMemory
 
-DB_PATH = "re_memory.sqlite"
-LLM_LOG = "llm_log.jsonl"  
+DB_PATH = "logs/data/re_memory.sqlite"
+LLM_LOG = "logs/data/llm_log.jsonl"  
 
 MODEL         = "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ"    
 TEMPERATURE   = 0.0
