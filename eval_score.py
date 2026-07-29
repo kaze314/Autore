@@ -1,17 +1,3 @@
-"""
-eval_score.py - score predicted function names against ground truth.
-
-    python eval_ground_truth.py   (inside Ghidra, on the PDB-applied project)
-    python eval_score.py                       # score re_memory.sqlite
-    python eval_score.py --db baseline.sqlite  # score a different run (ablation)
-
-Scoring is token-set F1, not exact match: "compute_sha1_hash" vs
-"SHA1_Transform" is a correct answer that exact match would score zero. Names
-are split (snake_case, camelCase, ::), lowercased, and synonym-normalized
-(init->initialize, buf->buffer) before comparison, so credit reflects meaning
-rather than spelling.
-"""
-
 import argparse
 import json
 import random
@@ -96,9 +82,8 @@ def report(truth, preds, show, sample=1000, seed=0):
               "the SAME binary? (a debug build won't match a release build)")
         return
 
-    # Shuffle before slicing: addresses sort into link order, so an unshuffled
-    # prefix is all CRT/STL startup code and not representative. Fixed seed so
-    # separate runs score the SAME functions and stay comparable.
+    # Shuffle before slicing
+    # Fixed seed so separate runs score the SAME functions and stay comparable.
     random.seed(seed)
     random.shuffle(keys)
     if sample:
@@ -129,12 +114,6 @@ def report(truth, preds, show, sample=1000, seed=0):
         print(f"  median             : {median:.3f}")
         print(f"  variance             : {variance:.3f}")
 
-    
-
-
-    
-
-
     # calibration: does the model's confidence predict correctness?
     print(f"\n  confidence calibration")
     print(f"    {'bucket':<10}{'n':>7}{'mean F1':>10}")
@@ -143,8 +122,6 @@ def report(truth, preds, show, sample=1000, seed=0):
                if (preds[a]["confidence"] or 0) >= lo and (preds[a]["confidence"] or 0) < hi]
         if sel:
             print(f"    {lo:.1f}-{hi:<6.1f}{len(sel):>7}{sum(sel)/len(sel):>10.3f}")
-
-
 
 
 def main():
