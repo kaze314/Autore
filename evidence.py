@@ -26,6 +26,14 @@ def _addr(hexstr):
     return "0x" + hexstr.lower()
 
 
+def global_key(symbol):
+    """Stable key for a global across runs. Ghidra's DAT_/PTR_ symbols carry
+    their address, so use that; anything already renamed (g_pFoo) has no address
+    in the name, so fall back to the name itself."""
+    m = re.search(r"([0-9a-fA-F]{5,})$", symbol or "")
+    return _addr(m.group(1)) if m else "name:" + (symbol or "").lower()
+
+
 def extract(decomp, self_name=None):
 
     callee_addrs = {_addr(h) for h in FUN_RE.findall(decomp)}
@@ -36,6 +44,11 @@ def extract(decomp, self_name=None):
 
     data_addrs = {_addr(h) for h in DATA_REF_RE.findall(decomp)}
     data_addrs |= {_addr(h) for h in STR_SYM_RE.findall(decomp)}
+
+    # addr -> symbol text as written, so the prompt can show "DAT_x -> g_pFoo"
+    data_refs = {}
+    for m in DATA_REF_RE.finditer(decomp):
+        data_refs.setdefault(_addr(m.group(1)), m.group(0))
 
     names = {n for n in CALL_RE.findall(decomp) if n not in _NON_CALLS}
     names.discard(self_name)
@@ -54,6 +67,7 @@ def extract(decomp, self_name=None):
     return {
         "callee_addrs": callee_addrs,
         "data_addrs": sorted(data_addrs),
+        "data_refs": data_refs,
         "named_calls": named_calls,
         "constants": constants,
         "literals": literals,
@@ -63,9 +77,11 @@ def extract(decomp, self_name=None):
 
 def build_bundle(address, orig_name, decomp, *, get_summary, callers,
                  imports_set=None, strings_map=None, callees=None,
-                 max_callees=40, max_strings=20):
+                 get_globals=None, max_callees=40, max_strings=20,
+                 max_globals=6):
     raw = extract(decomp, self_name=orig_name)
     imports_set = imports_set or set()
+    callees = callees or []
 
 
     strings = list(raw["literals"])
@@ -85,11 +101,26 @@ def build_bundle(address, orig_name, decomp, *, get_summary, callers,
         else:
             unknown_callees.append(ca)
 
+    # What earlier analyses concluded about the globals this function touches.
+    # Only globals that already have history are worth prompt space.
+    globals_seen = []
+    if get_globals:
+        for gaddr, symbol in raw["data_refs"].items():
+            if strings_map and gaddr in strings_map:
+                continue                      # that's a string literal, not a global
+            opinions = get_globals(global_key(symbol))
+            if opinions:
+                globals_seen.append({"symbol": symbol, "opinions": opinions})
+        globals_seen.sort(
+            key=lambda g: -(g["opinions"][0].get("confidence") or 0.0))
+        globals_seen = globals_seen[:max_globals]
+
     return {
         "address": address,
         "orig_name": orig_name,
         "decomp": decomp,
         "strings": strings,
+        "globals": globals_seen,
         "apis": apis,
         "known_named_calls": known_named,
         "known_callees": known_callees,
@@ -118,6 +149,27 @@ def render_prompt(bundle, max_decomp_chars=9000):
 
     if bundle.get("apis"):
         lines.append("Windows/CRT API calls: " + ", ".join(bundle["apis"]))
+        lines.append("")
+
+    if bundle.get("globals"):
+        lines.append("Globals used here (what earlier analyses concluded):")
+        for g in bundle["globals"]:
+            top = g["opinions"][0]
+            conf = top.get("confidence")
+            who = top.get("func_name") or "?"
+            lines.append(f"  {g['symbol']} -> {top.get('new_name') or '?'}  "
+                         f"[{who}, conf {conf if conf is not None else '?'}]")
+            if top.get("summary"):
+                lines.append(f"      {top['summary']}")
+
+            seen = {top.get("new_name")}
+            for alt in g["opinions"][1:]:
+                if alt.get("new_name") and alt["new_name"] not in seen:
+                    seen.add(alt["new_name"])
+                    lines.append(
+                        f"      also called {alt['new_name']} "
+                        f"[{alt.get('func_name') or '?'}, "
+                        f"conf {alt.get('confidence')}]")
         lines.append("")
 
     if bundle["known_callees"]:
